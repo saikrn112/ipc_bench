@@ -86,9 +86,10 @@ int main(int argc, char** argv)
     int* fdptr = (int*)CMSG_DATA(cmsg);
     memcpy(fdptr,(void*)&event_fd,sizeof(event_fd));
     msg.msg_controllen = cmsg->cmsg_len;
+    std::cout << "eventfd[" << event_fd << "]\n";
     
     sendmsg(fd,&msg,0);
-
+    size_t counter = 0;
     auto* sh = qb::SignalHandler::getInstance();
     while (true)
     {
@@ -97,6 +98,11 @@ int main(int argc, char** argv)
             std::cout << "recieved kill" << std::endl;
             break;
         }
+        if (counter%1000000 == 0)
+        {
+            eventfd_t val = 1;
+            eventfd_write(event_fd,val);
+        }
         if (!epoll.runOnce()
             || latMeasure.reached())
         {
@@ -104,6 +110,7 @@ int main(int argc, char** argv)
         }
     }
     latMeasure.stats();
+    ::close(fd);
 
     sleep(1);
 

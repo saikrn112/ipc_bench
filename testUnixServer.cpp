@@ -35,6 +35,7 @@ int main(int argc, char** argv)
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, ip.c_str(), sizeof(addr.sun_path) -1);
 
+    unlink(ip.c_str());
     ret = ::bind(fd, (struct sockaddr*)&addr, SUN_LEN(&addr));
     if (ret < 0)
     {
@@ -81,7 +82,6 @@ int main(int argc, char** argv)
             break;
         }
     }
-    writev
 
     return EXIT_SUCCESS;
 }

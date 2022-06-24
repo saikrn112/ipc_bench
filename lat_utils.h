@@ -24,6 +24,7 @@ enum class Type
     ACCEPT = 1,    
     RECV = 2,
     RECV_FD = 3,
+    EVENT = 4,
 };
 
 inline std::ostream& operator << (std::ostream& os, const Type& loc)
@@ -41,6 +42,10 @@ inline std::ostream& operator << (std::ostream& os, const Type& loc)
         case Type::RECV_FD:
         {
             return os << "RECV_FD";
+        }
+        case Type::EVENT:
+        {
+            return os << "EVENT";
         }
         default:
         {
@@ -80,6 +85,7 @@ struct IO
 {
     Type type;
     int socket;
+    int fd;
 };
 
 inline bool setNonblock(int fd)
@@ -134,6 +140,10 @@ public:
     }
     void stats() const
     {
+        if (latPackets.empty())
+        {
+            return;
+        }
         uint32_t latsumUs = 0;
         for (uint32_t ii=0; ii < latPackets.size(); ++ii) 
         {
@@ -166,7 +176,6 @@ private:
     int m_epoll;
     struct epoll_event m_events[1024];
     LatMeasure& m_latMeasure;
-    int event_fd;
 public:
 
     Epoll(LatMeasure& latMeasure)
@@ -186,6 +195,7 @@ public:
     
     int registerTransport(int socket, Type type)
     {
+        std::cout << "fd[" << socket << "] type[" << type << "]" << std::endl;
         struct epoll_event ev;
         ev.events = EPOLLIN
                 // | EPOLLOUT
@@ -273,7 +283,7 @@ public:
                             << strerror(errno) << "] during accept call" << std::endl;
                     continue;
                 }
-                registerTransport(c_fd,Type::RECV); 
+                registerTransport(c_fd,Type::RECV_FD); 
                 break;
             }
             case Type::RECV:
@@ -287,10 +297,7 @@ public:
                     break;
                 }
                 size_t lat;
-                char buf[8192];
-                memset((void*)buf, 0, 8192);
-                // size_t rec = recv(io->socket, (void*)&lat, sizeof(size_t), 0);
-                size_t rec = recvmsg(io->socket,(msghdr*)buf,0);
+                size_t rec = recv(io->socket, &lat, sizeof(size_t), 0);
                 if (rec < 0)
                 {
                     std::cout << "ERROR["  << errno << "] mean["
@@ -298,6 +305,49 @@ public:
                 }
                 m_latMeasure.record(lat);
                 sendPacket(io->socket);
+                break;
+            }
+            case Type::RECV_FD:
+            {
+                if (m_events[i].events & EPOLLERR
+                    || m_events[i].events & EPOLLHUP)
+                {
+                    std::cout << "deregistering" << std::endl;
+                    deregisterTransport(io->socket);
+                    ::close(io->socket);
+                    break;
+                }
+                int event_fd;
+                char buf[CMSG_SPACE(sizeof(event_fd))];
+                struct msghdr msg;
+                memset((void*)&msg,0,sizeof(msghdr));
+                msg.msg_control = buf;
+                msg.msg_controllen = sizeof(buf);
+
+                size_t rec = recvmsg(io->socket, &msg, 0);
+                if (rec < 0)
+                {
+                    std::cout << "ERROR["  << errno << "] mean["
+                            << strerror(errno) << "] during recvmsg call" << std::endl;
+                }
+                if (msg.msg_controllen <= 0)
+                {
+                    std::cout << "nothing to act on" << std::endl;
+                    break;
+                }
+
+                struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+                int* fdptr = (int*)CMSG_DATA(cmsg);
+                memcpy((void*)&event_fd,(void*)fdptr,sizeof(event_fd));
+                registerTransport(event_fd,Type::EVENT);
+                
+                break;
+            }
+            case Type::EVENT:
+            {
+                eventfd_t val = 0;
+                eventfd_read(io->socket,&val);
+                std::cout << "received event[" << val << "]\n";
                 break;
             }
                 
